@@ -1,0 +1,364 @@
+const express = require('express');
+const verifyToken = require('./middleware/verifyToken');
+require('dotenv').config();
+
+const { initializeApp, cert } = require('firebase-admin/app');
+const { getFirestore } = require('firebase-admin/firestore');
+
+const app = express();
+const PORT = process.env.PORT || 5000;
+// Middleware
+app.use(express.json());
+
+// Firebase initialization
+initializeApp({
+  credential: cert(require('./config/serviceAccountKey.json')),
+});
+
+const db = getFirestore();
+
+console.log('Firebase Admin connected!');
+
+// ===============================
+// HOME
+// ===============================
+
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Dementia Backend API is running'
+  });
+});
+
+// ===============================
+// DIFFICULTY API
+// ===============================
+
+app.get('/difficulty/:gameType/:level', async (req, res) => {
+  try {
+    const { gameType, level } = req.params;
+
+    const id = `${gameType}_level_${level}`;
+
+    const doc = await db.collection('difficultyLevels').doc(id).get();
+
+    if (!doc.exists) {
+      return res.status(404).json({
+        message: 'Difficulty level not found'
+      });
+    }
+
+    res.json(doc.data());
+
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      message: 'Server error'
+    });
+  }
+});
+
+// ===============================
+// USERS API
+// ===============================
+
+// Create a user
+app.post('/users', async (req, res) => {
+  try {
+    const { name, age } = req.body;
+
+    if (!name || !age) {
+      return res.status(400).json({
+        message: 'Name and age are required'
+      });
+    }
+
+    const userRef = await db.collection('users').add({
+      name: name,
+      age: age,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    res.status(201).json({
+      message: 'User created successfully',
+      userId: userRef.id
+    });
+
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      message: 'Failed to create user'
+    });
+  }
+});
+
+// Get a user
+app.get('/users/:id', async (req, res) => {
+  try {
+    const userId = req.params.id;
+
+    const doc = await db.collection('users').doc(userId).get();
+
+    if (!doc.exists) {
+      return res.status(404).json({
+        message: 'User not found'
+      });
+    }
+
+    res.json({
+      userId: doc.id,
+      ...doc.data()
+    });
+
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      message: 'Failed to get user'
+    });
+  }
+});
+
+// ===============================
+// SESSIONS API
+// ===============================
+
+// Create a session
+app.post('/sessions', verifyToken, async (req, res) => {
+  try {
+    const {
+      userId,
+      gameType,
+      level,
+      startedAt,
+      completedAt,
+      durationSeconds
+    } = req.body;
+
+    if (!userId || !gameType || !level) {
+      return res.status(400).json({
+        message: 'userId, gameType and level are required'
+      });
+    }
+
+    const sessionRef = await db.collection('sessions').add({
+      userId: userId,
+      gameType: gameType,
+      level: level,
+      startedAt: startedAt || new Date(),
+      completedAt: completedAt || null,
+      durationSeconds: durationSeconds || 0
+    });
+
+    res.status(201).json({
+      message: 'Session created successfully',
+      sessionId: sessionRef.id
+    });
+
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      message: 'Failed to create session'
+    });
+  }
+});
+
+// Get a session
+app.get('/sessions/:id', verifyToken, async (req, res) => {
+  try {
+    const sessionId = req.params.id;
+
+    const doc = await db.collection('sessions').doc(sessionId).get();
+
+    if (!doc.exists) {
+      return res.status(404).json({
+        message: 'Session not found'
+      });
+    }
+
+    res.json({
+      sessionId: doc.id,
+      ...doc.data()
+    });
+
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      message: 'Failed to get session'
+    });
+  }
+});
+// ===============================
+// PERFORMANCE API
+// ===============================
+
+// Create performance record
+app.post('/performance', verifyToken, async (req, res) => {
+  try {
+    const {
+      userId,
+      sessionId,
+      gameType,
+      level,
+      score,
+      accuracy,
+      errors,
+      responseTimeSeconds
+    } = req.body;
+
+    // Validate required fields
+    if (
+      !userId ||
+      !sessionId ||
+      !gameType ||
+      level === undefined ||
+      score === undefined ||
+      accuracy === undefined
+    ) {
+      return res.status(400).json({
+        message: 'userId, sessionId, gameType, level, score and accuracy are required'
+      });
+    }
+
+    const performanceRef = await db.collection('performance').add({
+      userId: userId,
+      sessionId: sessionId,
+      gameType: gameType,
+      level: level,
+      score: score,
+      accuracy: accuracy,
+      errors: errors || 0,
+      responseTimeSeconds: responseTimeSeconds || 0,
+      createdAt: new Date()
+    });
+
+    res.status(201).json({
+      message: 'Performance recorded successfully',
+      performanceId: performanceRef.id
+    });
+
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      message: 'Failed to record performance'
+    });
+  }
+});
+
+
+// Get performance records for a user
+app.get('/performance/:userId', verifyToken, async (req, res) => {
+  try {
+    const userId = req.params.userId;
+
+    const snapshot = await db
+      .collection('performance')
+      .where('userId', '==', userId)
+      .get();
+
+    const performances = [];
+
+    snapshot.forEach(doc => {
+      performances.push({
+        performanceId: doc.id,
+        ...doc.data()
+      });
+    });
+
+    res.json({
+      userId: userId,
+      count: performances.length,
+      performances: performances
+    });
+
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      message: 'Failed to get performance records'
+    });
+  }
+});
+// ===============================
+// PROGRESS API
+// ===============================
+
+// Get user progress
+app.get('/progress/:userId', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+
+    const snapshot = await db
+      .collection('performance')
+      .where('userId', '==', userId)
+      .get();
+
+    if (snapshot.empty) {
+      return res.json({
+        userId: userId,
+        totalGames: 0,
+        averageAccuracy: 0,
+        gameTypeBreakdown: {},
+        currentLevel: {}
+      });
+    }
+
+    let totalAccuracy = 0;
+
+    const gameTypeBreakdown = {};
+    const currentLevel = {};
+
+    snapshot.forEach(doc => {
+      const data = doc.data();
+
+      totalAccuracy += Number(data.accuracy) || 0;
+
+      // Count games by type
+      if (!gameTypeBreakdown[data.gameType]) {
+        gameTypeBreakdown[data.gameType] = 0;
+      }
+
+      gameTypeBreakdown[data.gameType]++;
+
+      // Store highest level reached
+      if (
+        !currentLevel[data.gameType] ||
+        data.level > currentLevel[data.gameType]
+      ) {
+        currentLevel[data.gameType] = data.level;
+      }
+    });
+
+    const totalGames = snapshot.size;
+    const averageAccuracy = totalAccuracy / totalGames;
+
+    res.json({
+      userId: userId,
+      totalGames: totalGames,
+      averageAccuracy: Number(averageAccuracy.toFixed(2)),
+      gameTypeBreakdown: gameTypeBreakdown,
+      currentLevel: currentLevel
+    });
+
+  } catch (error) {
+    console.error(error);
+
+    res.status(500).json({
+      message: 'Failed to get user progress'
+    });
+  }
+});
+console.log('Progress route registered');
+
+// ===============================
+// START SERVER
+// ===============================
+
+app.listen(PORT, () => {
+  console.log(`Server running at http://localhost:${PORT}`);
+});
