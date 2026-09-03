@@ -223,7 +223,44 @@ app.post('/performance', verifyToken, async (req, res) => {
         message: 'userId, sessionId, gameType, level, score and accuracy are required'
       });
     }
+    const validGameTypes = [
+  'pattern_recall',
+  'sequencing',
+  'face_name_matching',
+  'object_placement'
+];
 
+if (!validGameTypes.includes(gameType)) {
+  return res.status(400).json({
+    message: 'Invalid gameType'
+  });
+}
+
+if (Number(accuracy) < 0 || Number(accuracy) > 100 || isNaN(Number(accuracy))) {
+  return res.status(400).json({
+    message: 'accuracy must be a number between 0 and 100'
+  });
+}
+if (
+  !Number.isInteger(Number(level)) ||
+  Number(level) < 1 ||
+  Number(level) > 4
+) {
+  return res.status(400).json({
+    message: 'level must be an integer between 1 and 4'
+  });
+}
+if (Number(score) < 0 || isNaN(Number(score))) {
+  return res.status(400).json({
+    message: 'score must be a non-negative number'
+  });
+}
+
+if (errors !== undefined && (Number(errors) < 0 || isNaN(Number(errors)))) {
+  return res.status(400).json({
+    message: 'errors must be a non-negative number'
+  });
+}
     const performanceRef = await db.collection('performance').add({
       userId: userId,
       sessionId: sessionId,
@@ -289,8 +326,7 @@ app.get('/performance/:userId', verifyToken, async (req, res) => {
 // ===============================
 
 // Get user progress
-app.get('/progress/:userId', async (req, res) => {
-  try {
+app.get('/progress/:userId', verifyToken, async (req, res) => { try {
     const userId = req.params.userId;
 
     const snapshot = await db
@@ -309,7 +345,6 @@ app.get('/progress/:userId', async (req, res) => {
     }
 
     let totalAccuracy = 0;
-
     const gameTypeBreakdown = {};
     const currentLevel = {};
 
@@ -318,14 +353,12 @@ app.get('/progress/:userId', async (req, res) => {
 
       totalAccuracy += Number(data.accuracy) || 0;
 
-      // Count games by type
       if (!gameTypeBreakdown[data.gameType]) {
         gameTypeBreakdown[data.gameType] = 0;
       }
 
       gameTypeBreakdown[data.gameType]++;
 
-      // Store highest level reached
       if (
         !currentLevel[data.gameType] ||
         data.level > currentLevel[data.gameType]
@@ -353,8 +386,81 @@ app.get('/progress/:userId', async (req, res) => {
     });
   }
 });
+
 console.log('Progress route registered');
 
+// ===============================
+// ADAPTIVE DIFFICULTY API
+app.post('/adaptive/next-level', verifyToken, async (req, res) => {
+  try {
+    const {
+      gameType,
+      currentLevel,
+      accuracy
+    } = req.body;
+
+    if (
+      !gameType ||
+      currentLevel === undefined ||
+      accuracy === undefined
+    ) {
+      return res.status(400).json({
+        message: 'gameType, currentLevel and accuracy are required'
+      });
+    }
+
+    const validGameTypes = [
+      'pattern_recall',
+      'sequencing',
+      'face_name_matching',
+      'object_placement'
+    ];
+
+    if (!validGameTypes.includes(gameType)) {
+      return res.status(400).json({
+        message: 'Invalid gameType'
+      });
+    }
+    if (!Number.isInteger(Number(currentLevel)) || Number(currentLevel) < 1 || Number(currentLevel) > 4) {
+  return res.status(400).json({
+    message: 'currentLevel must be an integer between 1 and 4'
+  });
+}
+if (Number(accuracy) < 0 || Number(accuracy) > 100 || isNaN(Number(accuracy))) {
+  return res.status(400).json({
+    message: 'accuracy must be a number between 0 and 100'
+  });
+}
+
+    let nextLevel = Number(currentLevel);
+    let reason = 'Keep current level';
+
+    if (Number(accuracy) > 85) {
+      nextLevel++;
+      reason = 'Accuracy above 85%, increasing difficulty';
+    } else if (Number(accuracy) < 50) {
+      nextLevel--;
+      reason = 'Accuracy below 50%, decreasing difficulty';
+    }
+
+    if (nextLevel < 1) nextLevel = 1;
+    if (nextLevel > 4) nextLevel = 4;
+
+    res.json({
+      gameType: gameType,
+      currentLevel: Number(currentLevel),
+      accuracy: Number(accuracy),
+      nextLevel: nextLevel,
+      reason: reason
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      message: 'Failed to calculate next level'
+    });
+  }
+});
 // ===============================
 // START SERVER
 // ===============================
