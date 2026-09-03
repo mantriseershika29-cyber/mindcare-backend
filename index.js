@@ -1,12 +1,13 @@
 const express = require('express');
+const cors = require('cors');
 const verifyToken = require('./middleware/verifyToken');
 require('dotenv').config();
-
 const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+app.use(cors());
 // Middleware
 app.use(express.json());
 
@@ -63,105 +64,58 @@ app.get('/difficulty/:gameType/:level', async (req, res) => {
 // ===============================
 
 // Create a user
-app.post('/users', async (req, res) => {
-  try {
-    const { name, age } = req.body;
-
-    if (!name || !age) {
-      return res.status(400).json({
-        message: 'Name and age are required'
-      });
-    }
-
-    const userRef = await db.collection('users').add({
-      name: name,
-      age: age,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    });
-
-    res.status(201).json({
-      message: 'User created successfully',
-      userId: userRef.id
-    });
-
-  } catch (error) {
-    console.error(error);
-
-    res.status(500).json({
-      message: 'Failed to create user'
-    });
-  }
-});
-
-// Get a user
-app.get('/users/:id', async (req, res) => {
-  try {
-    const userId = req.params.id;
-
-    const doc = await db.collection('users').doc(userId).get();
-
-    if (!doc.exists) {
-      return res.status(404).json({
-        message: 'User not found'
-      });
-    }
-
-    res.json({
-      userId: doc.id,
-      ...doc.data()
-    });
-
-  } catch (error) {
-    console.error(error);
-
-    res.status(500).json({
-      message: 'Failed to get user'
-    });
-  }
-});
-
-// ===============================
-// SESSIONS API
-// ===============================
-
-// Create a session
 app.post('/sessions', verifyToken, async (req, res) => {
   try {
-    const {
-      userId,
-      gameType,
-      level,
-      startedAt,
-      completedAt,
-      durationSeconds
-    } = req.body;
+   const { gameType, level } = req.body;
+const userId = req.user.uid;
 
-    if (!userId || !gameType || !level) {
+    const validGameTypes = [
+      'pattern_recall',
+      'sequencing',
+      'face_name_matching',
+      'object_placement'
+    ];
+
+    // Required fields
+    if (!gameType || level === undefined) {
       return res.status(400).json({
-        message: 'userId, gameType and level are required'
+        error: 'userId, gameType and level are required'
       });
     }
 
-    const sessionRef = await db.collection('sessions').add({
-      userId: userId,
-      gameType: gameType,
-      level: level,
-      startedAt: startedAt || new Date(),
-      completedAt: completedAt || null,
-      durationSeconds: durationSeconds || 0
-    });
+    // Validate game type
+    if (!validGameTypes.includes(gameType)) {
+      return res.status(400).json({
+        error: 'Invalid gameType'
+      });
+    }
+
+    // Validate level
+    if (!Number.isInteger(Number(level)) || Number(level) < 1 || Number(level) > 4) {
+      return res.status(400).json({
+        error: 'level must be between 1 and 4'
+      });
+    }
+
+    const sessionData = {
+      userId,
+      gameType,
+      level: Number(level),
+      startedAt: new Date()
+    };
+
+    const docRef = await db.collection('sessions').add(sessionData);
 
     res.status(201).json({
       message: 'Session created successfully',
-      sessionId: sessionRef.id
+      sessionId: docRef.id
     });
 
   } catch (error) {
-    console.error(error);
+    console.error('Error creating session:', error);
 
     res.status(500).json({
-      message: 'Failed to create session'
+      error: 'Failed to create session'
     });
   }
 });
@@ -200,29 +154,44 @@ app.get('/sessions/:id', verifyToken, async (req, res) => {
 app.post('/performance', verifyToken, async (req, res) => {
   try {
     const {
-      userId,
-      sessionId,
-      gameType,
-      level,
-      score,
-      accuracy,
-      errors,
-      responseTimeSeconds
-    } = req.body;
+  sessionId,
+  gameType,
+  level,
+  score,
+  accuracy,
+  errors,
+  responseTimeSeconds
+} = req.body;
+
+const userId = req.user.uid;
 
     // Validate required fields
     if (
-      !userId ||
-      !sessionId ||
-      !gameType ||
-      level === undefined ||
-      score === undefined ||
-      accuracy === undefined
-    ) {
+  !sessionId ||
+  !gameType ||
+  level === undefined ||
+  score === undefined ||
+  accuracy === undefined
+){
       return res.status(400).json({
         message: 'userId, sessionId, gameType, level, score and accuracy are required'
       });
     }
+    const sessionDoc = await db.collection('sessions').doc(sessionId).get();
+
+if (!sessionDoc.exists) {
+  return res.status(404).json({
+    message: 'Session not found'
+  });
+}
+
+const sessionData = sessionDoc.data();
+
+if (sessionData.userId !== userId) {
+  return res.status(403).json({
+    message: 'Session does not belong to this user'
+  });
+}
     const validGameTypes = [
   'pattern_recall',
   'sequencing',
@@ -259,6 +228,14 @@ if (Number(score) < 0 || isNaN(Number(score))) {
 if (errors !== undefined && (Number(errors) < 0 || isNaN(Number(errors)))) {
   return res.status(400).json({
     message: 'errors must be a non-negative number'
+  });
+}
+if (
+  responseTimeSeconds !== undefined &&
+  (Number(responseTimeSeconds) < 0 || isNaN(Number(responseTimeSeconds)))
+) {
+  return res.status(400).json({
+    message: 'responseTimeSeconds must be a non-negative number'
   });
 }
     const performanceRef = await db.collection('performance').add({

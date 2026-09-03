@@ -521,3 +521,4 @@ The `progress` collection is not currently stored separately in Firestore.
 Progress is calculated dynamically from records in the `performance` collection by the `/progress/:userId` API.
 
 The `users` collection currently uses an auto-generated Firestore document ID. Firebase UID ownership linking can be added during frontend authentication integration.
+s
