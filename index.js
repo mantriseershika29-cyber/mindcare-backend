@@ -269,6 +269,13 @@ if (
 app.get('/performance/:userId', verifyToken, async (req, res) => {
   try {
     const userId = req.params.userId;
+    if (req.user.uid !== userId) {
+  return res.status(403).json({
+    message: 'You can only access your own progress'
+  });
+}
+    
+
 
     const snapshot = await db
       .collection('performance')
