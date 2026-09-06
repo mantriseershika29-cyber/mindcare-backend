@@ -2,8 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const verifyToken = require('./middleware/verifyToken');
 require('dotenv').config();
-const { initializeApp, cert } = require('firebase-admin/app');
-const { getFirestore } = require('firebase-admin/firestore');
 const { submitRoundResult } = require('./adaptive-engine/src');
 
 const app = express();
@@ -13,15 +11,11 @@ app.use(cors());
 app.use(express.json());
 
 // Firebase initialization
-initializeApp({
-  credential: cert(require('./config/serviceAccountKey.json')),
-});
-
-const db = getFirestore();
+const { db } = require('./config/firebase');
 
 console.log('Firebase Admin connected!');
 
-// ===============================
+ //===============================
 // HOME
 // ===============================
 
