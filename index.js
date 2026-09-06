@@ -4,6 +4,7 @@ const verifyToken = require('./middleware/verifyToken');
 require('dotenv').config();
 const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore');
+const { submitRoundResult } = require('./adaptive-engine/src');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -375,23 +376,19 @@ console.log('Progress route registered');
 
 // ===============================
 // ADAPTIVE DIFFICULTY API
+// ===============================
+
 app.post('/adaptive/next-level', verifyToken, async (req, res) => {
   try {
-    const {
+    const { gameType, currentLevel, accuracy } = req.body;
+    const userId = req.user.uid;
+
+    console.log('Adaptive request:', {
       gameType,
       currentLevel,
-      accuracy
-    } = req.body;
-
-    if (
-      !gameType ||
-      currentLevel === undefined ||
-      accuracy === undefined
-    ) {
-      return res.status(400).json({
-        message: 'gameType, currentLevel and accuracy are required'
-      });
-    }
+      accuracy,
+      userId
+    });
 
     const validGameTypes = [
       'pattern_recall',
@@ -405,43 +402,133 @@ app.post('/adaptive/next-level', verifyToken, async (req, res) => {
         message: 'Invalid gameType'
       });
     }
-    if (!Number.isInteger(Number(currentLevel)) || Number(currentLevel) < 1 || Number(currentLevel) > 4) {
-  return res.status(400).json({
-    message: 'currentLevel must be an integer between 1 and 4'
-  });
-}
-if (Number(accuracy) < 0 || Number(accuracy) > 100 || isNaN(Number(accuracy))) {
-  return res.status(400).json({
-    message: 'accuracy must be a number between 0 and 100'
-  });
-}
 
-    let nextLevel = Number(currentLevel);
-    let reason = 'Keep current level';
+    const level = Number(currentLevel);
+    const accuracyPercent = Number(accuracy);
 
-    if (Number(accuracy) > 85) {
-      nextLevel++;
-      reason = 'Accuracy above 85%, increasing difficulty';
-    } else if (Number(accuracy) < 50) {
-      nextLevel--;
-      reason = 'Accuracy below 50%, decreasing difficulty';
+    if (!Number.isInteger(level) || level < 1 || level > 4) {
+      return res.status(400).json({
+        message: 'currentLevel must be an integer between 1 and 4'
+      });
     }
 
-    if (nextLevel < 1) nextLevel = 1;
-    if (nextLevel > 4) nextLevel = 4;
+    if (
+      !Number.isFinite(accuracyPercent) ||
+      accuracyPercent < 0 ||
+      accuracyPercent > 100
+    ) {
+      return res.status(400).json({
+        message: 'accuracy must be a number between 0 and 100'
+      });
+    }
 
-    res.json({
-      gameType: gameType,
-      currentLevel: Number(currentLevel),
-      accuracy: Number(accuracy),
-      nextLevel: nextLevel,
-      reason: reason
+    // Get the user's performance records
+const snapshot = await db
+  .collection('performance')
+  .where('userId', '==', userId)
+  .get();
+
+const matchingPerformances = [];
+
+snapshot.forEach(doc => {
+  const data = doc.data();
+
+  if (
+    data.gameType === gameType &&
+    Number(data.level) === level
+  ) {
+    matchingPerformances.push(data);
+  }
+});
+
+let correctCount;
+let totalCount;
+let responseTimeSec;
+
+if (matchingPerformances.length > 0) {
+
+  // Sort newest performance first
+  matchingPerformances.sort((a, b) => {
+    const timeA = a.createdAt?.toDate
+      ? a.createdAt.toDate().getTime()
+      : new Date(a.createdAt).getTime();
+
+    const timeB = b.createdAt?.toDate
+      ? b.createdAt.toDate().getTime()
+      : new Date(b.createdAt).getTime();
+
+    return timeB - timeA;
+  });
+
+  const latest = matchingPerformances[0];
+
+  correctCount = Number(latest.score) || 0;
+
+  const errors = Number(latest.errors) || 0;
+
+  totalCount = correctCount + errors;
+
+  responseTimeSec =
+    Number(latest.responseTimeSeconds) || 0;
+
+} else {
+
+  // Fallback when no matching performance exists
+  totalCount = 100;
+  correctCount = accuracyPercent;
+  responseTimeSec = 10;
+}
+
+// Prevent invalid total count
+if (totalCount <= 0) {
+  totalCount = 100;
+  correctCount = accuracyPercent;
+}
+
+    console.log('Sending real performance to adaptive engine:', {
+      userId,
+      gameType,
+      level,
+      correctCount,
+      totalCount,
+      responseTimeSec
+    });
+
+    // Trayee's Adaptive Engine
+    const adaptiveResult = submitRoundResult({
+      userId,
+      gameType,
+      level,
+      correctCount,
+      totalCount,
+      responseTimeSec
+    });
+
+    console.log('Adaptive engine result:', adaptiveResult);
+
+    return res.json({
+      gameType,
+      currentLevel: level,
+      accuracy: Number(
+        (adaptiveResult.accuracy * 100).toFixed(2)
+      ),
+      nextLevel: adaptiveResult.nextLevel,
+      reason: adaptiveResult.reason,
+      action: adaptiveResult.action,
+      nextTemplate: adaptiveResult.nextTemplate,
+      timeRatio: adaptiveResult.timeRatio,
+      performanceTag: adaptiveResult.performanceTag
     });
 
   } catch (error) {
-    console.error(error);
-    res.status(500).json({
-      message: 'Failed to calculate next level'
+    console.error('================ ADAPTIVE ERROR ================');
+console.error(error);
+console.error(error.stack);
+console.error('=================================================');
+
+    return res.status(500).json({
+      message: 'Failed to calculate next level',
+      error: error.message
     });
   }
 });
